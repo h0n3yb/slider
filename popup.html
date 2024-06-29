@@ -8,9 +8,32 @@
 <body>
   <div id="app">
     <h1>Sales AILG</h1>
-    <input type="text" id="leadName" placeholder="Enter Lead Name">
-    <textarea id="additionalInfo" placeholder="Enter any information to use or guide bio generation"></textarea>
-    <button id="generate">Generate</button>
+    <div class="tab">
+      <button class="tablinks active" id="singleLeadTab">Single Lead</button>
+      <button class="tablinks" id="batchUploadTab">Batch Upload</button>
+    </div>
+
+    <div id="singleLeadContent" class="tabcontent">
+      <input type="text" id="leadName" placeholder="Enter Lead Name">
+      <textarea id="additionalInfo" placeholder="Enter any information to use or guide bio generation"></textarea>
+      <button id="generate">Generate</button>
+    </div>
+
+    <div id="batchUploadContent" class="tabcontent" style="display:none;">
+      <div class="batch-controls">
+        <label for="csvFile" class="file-upload-label">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M11 14.9861C11 15.5384 11.4477 15.9861 12 15.9861C12.5523 15.9861 13 15.5384 13 14.9861V7.82831L16.2428 11.0711C16.6333 11.4616 17.2665 11.4616 17.657 11.0711C18.0475 10.6805 18.0475 10.0474 17.657 9.65685L12.7071 4.70685C12.3166 4.31632 11.6834 4.31632 11.2929 4.70685L6.34315 9.65685C5.95262 10.0474 5.95262 10.6805 6.34315 11.0711C6.73367 11.4616 7.36684 11.4616 7.75736 11.0711L11 7.82831V14.9861Z" fill="currentColor"/>
+            <path d="M4 14H6V18H18V14H20V18C20 19.1046 19.1046 20 18 20H6C4.89543 20 4 19.1046 4 18V14Z" fill="currentColor"/>
+          </svg>
+          <span>CSV</span>
+        </label>
+        <input type="file" id="csvFile" accept=".csv" style="display: none;">
+        <button id="generateBatch">Generate</button>
+      </div>
+      <div id="fileNameDisplay"></div>
+    </div>
+
     <div id="loading-spinner">
       <div class="spinner"></div>
     </div>
