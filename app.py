@@ -90,54 +90,6 @@ def search(query):
 
     return response.text
 
-def scrape_linkedin_profiles(url):
-    
-    headers = {
-        "User-Agent": "rwtreter",
-    }
-
-    profile_obj = {
-        "profile_name" : "",
-        "description" : ""
-    }
-
-    logging.info(f"Accessing url: {url}")
-    
-    response = requests.get(url, headers=headers)
-
-    if response.status_code == 200:
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Extract profile information
-        title_tag = soup.find('title')
-        designation_tag = soup.find('h2')
-        followers_tag = soup.find('meta', {"property": "og:description"})
-        description_tag = soup.find('p', class_='break-words')
-
-        # Check if the tags are found before calling get_text()
-        name = title_tag.get_text(strip=True).split("|")[0].strip() if title_tag else "Profile Name not found"
-        designation = designation_tag.get_text(strip=True) if designation_tag else "Designation not found"
-
-        # Use regular expression to extract followers and description count
-        followers_match = re.search(r'\b(\d[\d,.]*)\s+followers\b', followers_tag["content"]) if followers_tag else None
-        followers_count = followers_match.group(1) if followers_match else "Followers count not found"
-
-        description = description_tag.get_text(strip=True) if description_tag else "Description not found"
-
-        logging.info(f"Profile Name: {name}")
-        logging.info(f"Designation: {designation}")
-        logging.info(f"Followers Count: {followers_count}")
-        logging.info(f"Description: {description}")
-        
-        profile_obj["profile_name"] = name
-        profile_obj["description"] = description
-
-        return profile_obj
-    else:
-        logging.info(f"Error: Unable to retrieve the LinkedIn company profile. Status code: {response.status_code}")
-        return None
-
 async def retrieve_rid_data(rid, timeout=10):
     async with aiohttp.ClientSession() as session:
         storage_url = "https://api.crawlbase.com/storage"
@@ -155,43 +107,47 @@ async def retrieve_rid_data(rid, timeout=10):
 
         while datetime.now() < end_time:
             try:
+                print(f"Attempting to retrieve data for RID: {rid}")
                 async with session.get(storage_url, params=storage_params) as response:
-                    response.raise_for_status()
-                    data = await response.json(content_type=None)
-                    
-                    if data:
-                        linkedin_scraped_obj = {
-                            "name": data["title"],
-                            "profile_url": data["profileUrl"],
-                            "headline": data["headline"],
-                            "position": data["positionInfo"]["company"],
-                            "school": data["educationInfo"]["school"],
-                            "summary": data["summary"]
-                        }
-                        return linkedin_scraped_obj
+                    print(f"Response status: {response.status}")
+                    if response.status == 404:
+                        print(f"404 Not Found for RID: {rid}. Data not ready yet.")
                     else:
-                        # If data is empty, treat it as a "not found" and continue retrying
-                        raise aiohttp.ClientResponseError(response.request_info, response.history, status=404)
-                    
+                        response.raise_for_status()
+                        data = await response.json(content_type=None)
+
+                        if data and all(key in data for key in ["title", "profileUrl", "headline", "positionInfo", "educationInfo", "summary"]):
+                            linkedin_scraped_obj = {
+                                "name": data["title"],
+                                "profile_url": data["profileUrl"],
+                                "headline": data["headline"],
+                                "position": data["positionInfo"]["company"],
+                                "school": data["educationInfo"]["school"],
+                                "summary": data["summary"]
+                            }
+                            print(f"Successfully retrieved data for RID: {rid}")
+                            return linkedin_scraped_obj
+                        else:
+                            print(f"Incomplete data received for RID: {rid}. Retrying...")
+
             except aiohttp.ClientResponseError as e:
-                if e.status == 404:
-                    remaining_time = (end_time - datetime.now()).total_seconds()
-                    if remaining_time <= 0:
-                        break
-                    
-                    print(f"404 Not Found, retrying, RID: {rid}. Time left: {remaining_time:.2f} seconds")
-                    await asyncio.sleep(min(sleep_time, remaining_time))
-                    sleep_time = min(sleep_time * 2, 60, remaining_time)  # Cap sleep time
-                else:
-                    print(f"HTTP error occurred, status {e.status}, exception: {e}")
+                print(f"ClientResponseError occurred, status {e.status}, exception: {e}")
+                if e.status != 404:
                     return None
             except Exception as e:
                 print(f"An unexpected error occurred: {e}")
                 return None
 
-        print(f"Failed to retrieve data for RID: {rid} after {timeout} minutes")
-        return None
+            remaining_time = (end_time - datetime.now()).total_seconds()
+            if remaining_time <= 0:
+                break
+            
+            print(f"Retrying, RID: {rid}. Time left: {remaining_time:.2f} seconds")
+            await asyncio.sleep(min(sleep_time, remaining_time))
+            sleep_time = min(sleep_time * 2, 60)  # Cap sleep time at 60 seconds
 
+        print(f"Timeout reached for RID: {rid}")
+        return None
 async def scrape_linkedin_profiles_v2(profile_link):
     async_url = "https://api.crawlbase.com/"
     params = {
@@ -203,41 +159,73 @@ async def scrape_linkedin_profiles_v2(profile_link):
     
     async with aiohttp.ClientSession() as session:
         try:
+            # Existing jobs
             rids_url = "https://api.crawlbase.com/storage/rids"
             rids_params = {
                 "token": crawlbase_key,
                 "limit": "100"
             }
             
-            rids_response = requests.get(rids_url, params=rids_params)
-            rids_response.raise_for_status()
-            rids_data = rids_response.json()
+            print("Getting list of rids")
+            async with session.get(rids_url, params=rids_params) as rids_response:
+                rids_response.raise_for_status()
+                rids_data = await rids_response.json()
+                rids = rids_data["rids"]
             
-            rids = rids_data["rids"]
-            print(rids)
-            for rid in rids:
-                print(f"Checking rid {rid}")
-                linkedin_data = await retrieve_rid_data(rid)
-                if linkedin_data:
-                    print(f'Checking {linkedin_data["profile_url"]}')
-                    if linkedin_data["profile_url"] in profile_link:
-                        return linkedin_data
-        
+            print("Start parallel processing of rids")
+            start_time = time.time()
+
+            # Create a ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                # Create a list of futures
+                futures = [
+                    asyncio.wrap_future(
+                        executor.submit(process_rid, rid, profile_link)
+                    )
+                    for rid in rids
+                ]
+
+                # Process futures as they complete
+                for future in asyncio.as_completed(futures):
+                    result = await future
+                    if result:
+                        end_time = time.time()
+                        print(f"RID retrieval time: {end_time - start_time} seconds, RID storage size: {len(rids)}")
+                        return result  # Return immediately when a match is found
+            
+            print("No match found in existing RIDs")
         except aiohttp.ClientError as e:
             print(f"Request error occurred: {e}")
-            return None
         except KeyError as e:
             print(f"Key error in response data: {e}")
-            return None
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-            return None
+        except json.JSONDecodeError as e:
+            print(f"JSON error: {e}")
 
         async with session.get(async_url, params=params) as response:
+            print("Query is not cached, getting new RID")
             response.raise_for_status()
             async_response = await response.json()
-        
-        return await retrieve_rid_data(async_response["rid"])
+
+        result = await retrieve_rid_data(async_response["rid"])
+        if result:
+            return result
+        else:
+            print("retrieve_rid_data on new RID failed")
+            return None
+
+
+def process_rid(rid, profile_link):
+    print(f"Checking rid {rid}")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        linkedin_data = loop.run_until_complete(retrieve_rid_data(rid))
+        if linkedin_data and linkedin_data["profile_url"] in profile_link:
+            print(f'Match found: {linkedin_data["profile_url"]}')
+            return linkedin_data
+    finally:
+        loop.close()
+    return None
 
 def query_llm(dossier):
     response = client.chat.completions.create(
@@ -305,52 +293,10 @@ def generate_bio():
    last_name = data['last']
    company_name = data['company']
 
-   results = json.loads(search(f"{first_name} {last_name} {company_name}"))
-
-   item_arr = results["organic"]
-   dossier = {
-       "linkedin_data": "",
-       "email": "",
-       "phone": ""
-   }
-
-   isLinkedin = False
-   for item in item_arr:
-       link = item["link"]
-       snippet = item["snippet"]
-       if "linkedin.com" in link:
-           isLinkedin = True
-           break
-
-   shouldQuery = False
-   if isLinkedin:
-       linkedin_data = asyncio.run(scrape_linkedin_profiles_v2(link))
-       if linkedin_data:
-           snippet_clean = re.sub(r'\| Learn more about .*?\.', '', snippet)
-           dossier["linkedin_data"] = str(linkedin_data) + snippet_clean
-           shouldQuery = True
-       else:
-            print("LinkedIn query failed") 
-   
-   if linkedin_data and linkedin_data["name"].lower() != f"{first_name} {last_name}".lower():
-    split_name = linkedin_data["name"].split(" ")
-    first_name = split_name[0]
-    last_name = split_name[1]
+   dossier = process_profile(first_name, last_name, company_name)
     
-   dossier["email"] = get_email(first_name, last_name, company_name)
-   #dossier["phone"] = "555-555-5555"
-
-   if shouldQuery:
-       response = query_llm(str(dossier["linkedin_data"]))
-       output_bio = response.choices[0].message.content
-
-       lead_obj = {
-        "bio" : output_bio,
-        "email" : dossier["email"],
-        "phone" : dossier["phone"]
-       }
-
-       return jsonify({'output': lead_obj})
+   if dossier:
+       return jsonify({'output': dossier})
    else:
        return jsonify({'error': 'Failed to generate bio'})
 
@@ -368,6 +314,7 @@ def generate_batch_bio():
     :return: JSON response with results or error message
     :rtype: flask.Response
     """
+
     if 'file' not in request.files:
         return jsonify({'error': 'No file part in the request'}), 400
     
@@ -419,6 +366,7 @@ def generate_batch_bio():
         return jsonify({'error': 'Allowed file type is csv'}), 400
 
 def process_row(row, column_count, row_index):
+
     """
     Process a single row from the CSV.
     
@@ -427,6 +375,7 @@ def process_row(row, column_count, row_index):
     :param row_index: The index of the current row
     :return: Tuple (Dictionary with processed profile data or None, Tuple with skipped row info or None)
     """
+
     try:
         if column_count == 3:
             first_name, last_name, company_name = row
@@ -437,10 +386,10 @@ def process_row(row, column_count, row_index):
             last_name = name_parts[1] if len(name_parts) > 1 else ""
         else:
             return None, (row_index, row, "Incorrect number of columns")
-        
+
         if not first_name or not company_name:
             return None, (row_index, row, "Missing required data (first name or company)")
-        
+
         result = process_profile(first_name, last_name, company_name)
         return result, None
     except Exception as e:
@@ -448,11 +397,13 @@ def process_row(row, column_count, row_index):
         return None, (row_index, row, f"Error: {str(e)}")
 
 def log_skipped_rows(skipped_rows):
+
     """
     Log skipped rows to a file.
     
     :param skipped_rows: List of tuples containing (row_index, row_data, reason)
     """
+
     if not skipped_rows:
         return
 

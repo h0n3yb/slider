@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Sales AILG",
-  "description": "Lead generation helper",
+  "name": "Slider",
+  "description": "Create, view, and export dossiers for leads",
   "version": "1.0",
   "action": {
     "default_popup": "popup.html"
